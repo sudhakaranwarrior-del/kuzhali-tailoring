@@ -151,7 +151,66 @@ export default function KuzhaliTailoringApp() {
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
   const [isMeasurementModalOpen, setIsMeasurementModalOpen] = useState(false);
   const [selectedOrderForBill, setSelectedOrderForBill] = useState(null);
+  const [aiImageBase64, setAiImageBase64] = useState(null);
+  const [aiImagePreview, setAiImagePreview] = useState(null);
+    const handleImageSelect = (e) => {
+    // 1. பயனர் தேர்ந்தெடுத்த முதல் புகைப்படத்தை எடுத்தல்
+    const file = e.target.files[0];
+    if (!file) return;
 
+    // 2. கோப்பை படிக்க FileReader-ஐ துவக்குதல்
+    const reader = new FileReader();
+
+    // 3. படம் படித்து முடிக்கப்பட்டதும் இயங்கும் பகுதி
+    reader.onloadend = () => {
+      // மொபைல் திரையில் பிரிவியூ காட்ட முழு டேட்டாவையும் சேமித்தல்
+      setAiImagePreview(reader.result);
+
+      // 'data:image/jpeg;base64,' என்ற தலைப்புப் பகுதியை நீக்கிவிட்டு, 
+      // Gemini API ஏற்கும் தூய Base64 குறியீட்டை மட்டும் பிரித்தெடுத்தல்
+      const base64Data = reader.result.split(',')[1];
+
+      // API-க்கு அனுப்ப வேண்டிய வடிவில் சேமித்தல்
+      setAiImageBase64({
+        inlineData: {
+          data: base64Data,
+          mimeType: file.type || "image/jpeg"
+        }
+      });
+    };
+
+    // 4. புகைப்படத்தை Data URL ஆக மாற்றத் தொடங்குதல்
+    reader.readAsDataURL(file);
+  };
+  export default function App() {
+  // 1. ஏற்கெனவே உள்ள state-கள்...
+  const [tab, setTab] = useState("dashboard");
+
+  // 2. நாம் சேர்த்த புதிய state-கள்:
+  const [aiImageBase64, setAiImageBase64] = useState(null);
+  const [aiImagePreview, setAiImagePreview] = useState(null);
+
+  // 3. நாம் சேர்த்த Helper Function:
+  const handleImageSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setAiImagePreview(reader.result);
+      const base64Data = reader.result.split(',')[1];
+      setAiImageBase64({
+        inlineData: {
+          data: base64Data,
+          mimeType: file.type || "image/jpeg"
+        }
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // 4. அடுத்து வரும் sendPromptToGemini மற்றும் பிற வரிகள்...
+
+  
   // Gemini AI Chat State
   const [geminiApiKey, setGeminiApiKey] = useState(localStorage.getItem("GEMINI_KEY") || "");
   const [aiChatMessages, setAiChatMessages] = useState([
@@ -471,7 +530,82 @@ export default function KuzhaliTailoringApp() {
   };
 
   // --- GEMINI AI ASSISTANT DISPATCHER ---
-  const sendPromptToGemini = async () => {
+    const sendPromptToGemini = async () => {
+    if (!aiInputPrompt.trim() && !aiImageBase64) return;
+    
+    const currentKey = geminiApiKey || localStorage.getItem("GEMINI_KEY") || "";
+    if (!currentKey.trim()) {
+      alert("தயவுசெய்து அமைப்புகளில் உங்கள் Gemini API Key-ஐ உள்ளிடவும்.");
+      return;
+    }
+
+    const userText = aiInputPrompt || "இந்த படத்தில் உள்ள தையல் / மிஷின் சிக்கலைப் பார்த்து தீர்வு சொல்லுங்கள்.";
+    setAiChatMessages(prev => [
+      ...prev, 
+      { sender: "user", text: userText, image: aiImagePreview }
+    ]);
+    
+    const imagePayload = aiImageBase64;
+    setAiInputPrompt("");
+    setAiImageBase64(null);
+    setAiImagePreview(null);
+    setAiLoading(true);
+
+    try {
+      const cleanKey = currentKey.trim();
+      // கூகுள் பரிந்துரைத்த புதிய gemini-3.8-flash எண்ட்பாயிண்ட்
+      const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent";
+
+      const parts = [];
+      if (imagePayload) {
+        parts.push(imagePayload);
+      }
+      parts.push({
+        text: `நீங்கள் 'குழலி தையலகம்' (உரிமையாளர்: தமிழ் செல்வி) கடையின் தலைசிறந்த தையல் மற்றும் தையல் மிஷின் பழுதுநீக்கும் நிபுணர் (Tailoring & Sewing Machine Expert). 
+பயனர் அனுப்பும் புகைப்படம் அல்லது கேள்வியைப் பரிசீலித்து, தையல் மிஷினில் நூல் அறுதல், லூப் தையல், டென்ஷன் பிரச்சனை, ஊசி மாற்றும் முறை, பிளவுஸ் வெட்டும் கணக்குகள் போன்றவற்றிற்கு நேரடியான, எளிய நடைமுறைத் தீர்வுகளை தமிழில் தரவும்.\n\nகேள்வி: ${userText}`
+      });
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": cleanKey
+        },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts }]
+        })
+      });
+
+      const data = await res.json();
+      
+      if (data.error) {
+        throw new Error(data.error.message || "API பிழை");
+      }
+
+      const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!reply) {
+        throw new Error("பதில் வரவில்லை");
+      }
+
+      setAiChatMessages(prev => [...prev, { sender: "ai", text: reply }]);
+    } catch (err) {
+      console.error(err);
+      setAiChatMessages(prev => [
+        ...prev,
+        { sender: "ai", text: `மன்னிக்கவும், பிழை ஏற்பட்டது (${err.message}). API Key சரியாக உள்ளதா என சரிபார்க்கவும்.` }
+      ]);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+
+  // --- PIN LOCK PROTECTION SCREEN ---
+  if (settings.isPinLocked && !isUnlocked) {
+    return (
+      <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', backgroundColor: '#581c87', padding: '20px', fontFamily: 'sans-serif' }}>
+        <div style={{ background: '#fff', borderRadius: '16px', padding: '30px', maxWidth: '380px', width: '100%', textAlign: 'center', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3)' }}>
+          <diconst sendPromptToGemini = async () => {
     if (!aiInputPrompt.trim()) return;
     
     // Settings-ல் இருந்தோ அல்லது LocalStorage-ல் இருந்தோ சாவியை எடுத்தல்
@@ -528,14 +662,7 @@ export default function KuzhaliTailoringApp() {
     } finally {
       setAiLoading(false);
     }
-  };
-
-  // --- PIN LOCK PROTECTION SCREEN ---
-  if (settings.isPinLocked && !isUnlocked) {
-    return (
-      <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', backgroundColor: '#581c87', padding: '20px', fontFamily: 'sans-serif' }}>
-        <div style={{ background: '#fff', borderRadius: '16px', padding: '30px', maxWidth: '380px', width: '100%', textAlign: 'center', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3)' }}>
-          <div style={{ fontSize: '48px', marginBottom: '10px' }}>🧵</div>
+  };v style={{ fontSize: '48px', marginBottom: '10px' }}>🧵</div>
           <h2 style={{ color: '#581c87', margin: '0 0 5px' }}>{settings.shopNameTamil}</h2>
           <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: '20px' }}>உரிமையாளர் பாதுகாப்பு PIN ஐ உள்ளிடவும்</p>
           <form onSubmit={handlePinSubmit}>
