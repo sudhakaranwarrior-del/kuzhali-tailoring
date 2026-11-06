@@ -473,9 +473,11 @@ export default function KuzhaliTailoringApp() {
   // --- GEMINI AI ASSISTANT DISPATCHER ---
   const sendPromptToGemini = async () => {
     if (!aiInputPrompt.trim()) return;
-    if (!geminiApiKey) {
-      alert("தயவுசெய்து அமைப்புகளில் உங்கள் Gemini API Key உள்ளிடவும்.");
-      setActiveTab("settings");
+    
+    // Settings-ல் இருந்தோ அல்லது LocalStorage-ல் இருந்தோ சாவியை எடுத்தல்
+    const currentKey = geminiApiKey || localStorage.getItem("GEMINI_KEY") || "";
+    if (!currentKey.trim()) {
+      alert("தயவுசெய்து அமைப்புகளில் உங்கள் Gemini API Key-ஐ உள்ளிடவும்.");
       return;
     }
 
@@ -485,24 +487,44 @@ export default function KuzhaliTailoringApp() {
     setAiLoading(true);
 
     try {
-      const systemInstruction = `You are the expert tailoring and business assistant for "குழலி தையலகம்" (Owner: Tamil Selvi, Contact: 8940204536).
-Answer in clear Tamil or Tanglish as preferred. Provide exact tailoring measurement formulas, blouse dart corrections, Aari work pricing calculations, or app usage steps.
-Never invent customer records or financial details. Always be polite and practical for a village/town tailoring entrepreneur.`;
+      // புதிய AQ. சாவிகளுக்கு Header-ல் x-goog-api-key வழியே அனுப்புதல்
+      const cleanKey = currentKey.trim();
+      const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
       const res = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": cleanKey
+        },
         body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: `${systemInstruction}\n\nUser Question: ${userText}` }] }]
+          contents: [{
+            role: "user",
+            parts: [{
+              text: `நீங்கள் 'குழலி தையலகம்' (உரிமையாளர்: தமிழ் செல்வி) கடையின் தையல் உதவியாளர். தையல் அளவுகள், வெட்டும் முறைகள் மற்றும் கணக்கு விவரங்களை தமிழில் தெளிவாக விளக்குங்கள்.\n\nகேள்வி: ${userText}`
+            }]
+          }]
         })
       });
 
       const data = await res.json();
-      const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text || "மன்னிக்கவும், பதிலளிக்க முடியவில்லை. API Key சரிபார்க்கவும்.";
+      
+      if (data.error) {
+        throw new Error(data.error.message || "API பிழை");
+      }
+
+      const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!reply) {
+        throw new Error("பதில் வரவில்லை");
+      }
+
       setAiChatMessages(prev => [...prev, { sender: "ai", text: reply }]);
     } catch (err) {
-      setAiChatMessages(prev => [...prev, { sender: "ai", text: "இணைப்பில் பிழை: " + err.message }]);
+      console.error(err);
+      setAiChatMessages(prev => [
+        ...prev,
+        { sender: "ai", text: `மன்னிக்கவும், பிழை ஏற்பட்டது (${err.message}). API Key சரியாக உள்ளதா என சரிபார்க்கவும்.` }
+      ]);
     } finally {
       setAiLoading(false);
     }
